@@ -1,0 +1,153 @@
+# App Platform spec for Facility Issue Tracker.
+# deploy.sh renders this with scripts/render-spec.js and feeds the result to
+# `doctl apps create --spec -`. Do not put secret values in this file.
+
+name: ${STACK_NAME}
+region: ${DO_REGION_SLUG}
+
+features:
+  - buildpack-stack=ubuntu-22
+
+# Binds the Managed Postgres cluster deploy.sh created, so the app gets
+# ${db.DATABASE_URL} without anyone copying a connection string around.
+databases:
+  - name: db
+    engine: PG
+    cluster_name: ${DB_CLUSTER_NAME}
+    # Name the database explicitly. Without db_name, ${db.DATABASE_URL}
+    # resolves to the cluster's default database (defaultdb) while the agents
+    # connect to ${DB_NAME} — the web tier writes complaints to one database,
+    # the agents look for them in another, and every ticket insert fails the
+    # foreign key. Nothing errors at deploy time; it only shows up as tickets
+    # that never arrive. Rendered from the same DB_NAME deploy.sh uses to
+    # build MARS_DATABASE_URL, so the two cannot drift.
+    db_name: ${DB_NAME}
+    production: true
+
+ingress:
+  rules:
+    - component:
+        name: web
+      match:
+        path:
+          prefix: /
+
+services:
+  - name: web
+    environment_slug: node-js
+    instance_count: 1
+    instance_size_slug: ${APP_SIZE}
+
+    # `github:` rather than `git: repo_clone_url:` — the git source type
+    # cannot authenticate to a private repo and fails with "Account does not
+    # have access to the repo", even once the DigitalOcean GitHub app is
+    # installed. The github source uses that installation.
+    github:
+      repo: ${GITHUB_REPO}
+      branch: ${GITHUB_BRANCH}
+      deploy_on_push: true
+
+    # The React client is built during deploy and served by Express from
+    # web/dist. Without this the buildpack installs the server's deps and
+    # ships no client at all — the app boots and every page 503s.
+    build_command: npm run build
+    run_command: npm start
+
+    health_check:
+      http_path: /healthz
+      initial_delay_seconds: 15
+      period_seconds: 10
+      failure_threshold: 5
+
+    envs:
+      - key: NODE_ENV
+        scope: RUN_TIME
+        value: production
+
+      # ── database ────────────────────────────────────────────────────────
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+      # DigitalOcean's cluster CA, so the app verifies the TLS chain rather
+      # than trusting it blindly. Public certificate, not a secret.
+      - key: DB_CA_CERT
+        scope: RUN_TIME
+        value: ${DB_CA_CERT_B64}
+
+      # ── ingest ──────────────────────────────────────────────────────────
+      # Every complaint fires the webhook trigger and a fresh microVM writes
+      # the ticket. This app only ever reads them back.
+      - key: MARS_TICKET_TABLE
+        scope: RUN_TIME
+        value: tickets
+      - key: MARS_WEBHOOK_URL
+        scope: RUN_TIME
+        value: ${MARS_WEBHOOK_URL}
+      - key: MARS_WEBHOOK_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: ${MARS_WEBHOOK_SECRET}
+      # Every intake trigger as JSON, round-robined by src/lib/mars.js. A
+      # Harness Runtime trigger runs one session at a time, so the length of
+      # this list is how many complaints can be processed at once.
+      - key: MARS_WEBHOOK_SHARDS
+        scope: RUN_TIME
+        type: SECRET
+        value: ${MARS_WEBHOOK_SHARDS_B64}
+      # The repository that gets one issue per ticket.
+      - key: GITHUB_ISSUE_REPO
+        scope: RUN_TIME
+        value: ${GITHUB_ISSUE_REPO}
+      # Stage machinery, not part of the demo: this lets the Reset button
+      # DELETE issues between rehearsals, which Action Gateway deliberately
+      # will not let an agent do. It is never passed to a sandbox or a
+      # trigger — only src/lib/github-admin.js reads it, behind the admin
+      # password. Optional; without it reset leaves the tracker alone.
+      - key: GITHUB_ISSUE_TOKEN
+        scope: RUN_TIME
+        type: SECRET
+        value: ${GITHUB_ISSUE_TOKEN}
+
+      # Fires the close agent from a ticket's Close button. Optional:
+      # without it the button still closes the ticket.
+      - key: CLOSE_WEBHOOK_URL
+        scope: RUN_TIME
+        value: ${CLOSE_WEBHOOK_URL}
+      - key: CLOSE_WEBHOOK_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: ${CLOSE_WEBHOOK_SECRET}
+
+      # ── inference ───────────────────────────────────────────────────────
+      - key: INFERENCE_BASE_URL
+        scope: RUN_TIME
+        value: ${INFERENCE_BASE_URL}
+      - key: INFERENCE_MODEL
+        scope: RUN_TIME
+        value: ${INFERENCE_MODEL}
+      - key: INFERENCE_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: ${INFERENCE_API_KEY}
+
+      # ── dashboard ───────────────────────────────────────────────────────
+      - key: ADMIN_PASSWORD
+        scope: RUN_TIME
+        type: SECRET
+        value: ${ADMIN_PASSWORD}
+      - key: SESSION_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: ${SESSION_SECRET}
+
+      # Lets the dashboard show the live MARS session census.
+      - key: DIGITALOCEAN_ACCESS_TOKEN
+        scope: RUN_TIME
+        type: SECRET
+        value: ${DIGITALOCEAN_ACCESS_TOKEN}
+
+      # A conference room submits in bursts; the inference service allows
+      # 240 req/min per team, so keep the per-visitor ceiling modest.
+      - key: RATE_MAX
+        scope: RUN_TIME
+        value: "8"

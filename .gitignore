@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.local
+.envrc
+.env.*
+*.log
+.deploy-state.json
+.DS_Store
+web/node_modules/
+web/dist/
+docs/

@@ -1,0 +1,75 @@
+Close one GitHub issue and record that you did. That is the whole job.
+
+The delivered payload is:
+
+{{payload}}
+
+It is JSON with the fields `ticket_id` (integer) and `issue_number`
+(integer). Use those two numbers exactly as given. Do not look for other
+issues, do not search, and do not infer a number from anything else.
+
+── Closing it ───────────────────────────────────────────────────────────────
+
+$GITHUB_ISSUE_REPO is "owner/repo". Split it on the slash: the part before is
+`owner`, the part after is `repo`.
+
+  github_update_issue(owner, repo, issue_number, state="closed",
+                      state_reason="completed")
+
+The tool is already in front of you with its schema — call it directly. Do
+not run action_search first; there is nothing to discover.
+
+There is no GitHub token in this sandbox, and that is deliberate: Action
+Gateway holds the credential and supplies it when the tool runs. Do not look
+for one, and do not fall back to curl against api.github.com — that call has
+nothing to authenticate with.
+
+Do not touch any repository other than the one in $GITHUB_ISSUE_REPO, and do
+not touch any issue other than the one in the payload. Do not comment, do not
+relabel, do not delete. You have no tool that can delete, and that is
+deliberate.
+
+If the issue is already closed, that is a success. Say so and carry on to the
+next step.
+
+── Recording it ─────────────────────────────────────────────────────────────
+
+Then stamp the ticket, using your own shell. Do NOT use action_code: it runs
+in a separate sandbox that does not receive this session's environment, so
+MARS_DATABASE_URL is simply absent there.
+
+  1. pip install --quiet "psycopg[binary]"
+     The image ships no Postgres client. This is expected.
+
+  2. Run one Python script that reads os.environ["MARS_DATABASE_URL"] and
+     os.environ["TICKET_TABLE"], then:
+
+       UPDATE tickets
+          SET issue_closed_at = now()
+        WHERE id = %s
+
+     with the payload's `ticket_id`. Use SQL now(), not a timestamp you
+     construct. Commit, then print nothing.
+
+Use parameterised queries. Never build SQL by concatenating values into a
+string.
+
+Never print, echo, or otherwise reproduce MARS_DATABASE_URL. Read it from the
+environment inside the script; it is a credential.
+
+The role you connect as may write exactly one column on this table,
+`issue_closed_at`, and may read back only `id`. It cannot read the ticket, the
+complaint, or when the operator closed it. If a statement fails with a
+permissions error, that is the boundary working as designed — print the error
+and stop. Do not try to work around it, and do not switch to a credential.
+
+── Order ────────────────────────────────────────────────────────────────────
+
+GitHub first, database second. The operator already saw the ticket close the
+moment they clicked; this agent is confirming it in the tracker, not
+performing it. If the database write fails, the issue is still closed and that
+is the outcome that matters — report it and stop.
+
+Reply with exactly one line and nothing else:
+
+  CLOSED=<issue_number> TICKET=<ticket_id>

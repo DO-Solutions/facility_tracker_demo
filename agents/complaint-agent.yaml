@@ -1,0 +1,162 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Facility Issue Tracker — webhook agent.
+#
+# One fired webhook = one session in its own microVM = one ticket. The session
+# classifies a single grievance and writes the row to Managed Postgres itself,
+# from its own shell. The web tier never sees it.
+#
+# deploy.sh expands every $${VAR} placeholder from the environment at create
+# time and supplies secrets with --secret, so nothing sensitive lives here.
+# Validate with:  doctl harness-runtime validate agents/complaint-agent.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: complaints-intake
+
+# opencode, not claude-code, and the reason is not stylistic: MARS
+# preflight-validates ANTHROPIC_API_KEY against api.anthropic.com whenever the
+# adapter is claude-code. It ignores every base-URL override while doing so, so
+# a DigitalOcean model key fails with a 401 and the session never starts.
+# opencode takes the credential at face value and calls whatever base URL it is
+# given, which is what keeps every model call in this demo on DigitalOcean.
+agent: opencode
+description: Converts one public grievance into one sober enterprise ticket.
+
+# Smallest box that will do. The work is one model call and one INSERT; the
+# demo's scale story is the number of these, not the size of any one.
+size: mars-1vcpu-1gb
+
+persistent_workspace: false
+idle_timeout: 5m
+
+env:
+  # All inference goes through DigitalOcean's serverless inference service.
+  #
+  # Note the /v1: opencode appends "/messages" to this base, where the
+  # Anthropic SDK would append "/v1/messages". Without it every call 404s
+  # against a DigitalOcean maintenance page that looks like an outage.
+  ANTHROPIC_BASE_URL: ${INFERENCE_BASE_URL}/v1
+  ANTHROPIC_MODEL: ${INFERENCE_MODEL}
+
+  # The platform-native equivalents. opencode does not read these today — it
+  # falls back to api.anthropic.com if they are all it is given — but they are
+  # the documented MARS keys, so set both and let the adapter take its pick.
+  HARNESS_INFERENCE_BASE_URL: ${INFERENCE_BASE_URL}/v1
+  HARNESS_INFERENCE_MODEL: ${INFERENCE_MODEL}
+
+  # Where the ticket goes. Read by the prompt, not by the harness.
+  TICKET_TABLE: ${MARS_TICKET_TABLE}
+
+  # owner/repo that gets a GitHub issue per ticket. The credential is not
+  # here — Action Gateway holds it. If no GitHub connection is configured
+  # the agent finds no tool, skips the issue, and still files the ticket.
+  GITHUB_ISSUE_REPO: ${GITHUB_ISSUE_REPO}
+
+secrets:
+  # A DigitalOcean model access key, not an Anthropic key — the base URL above
+  # points at DigitalOcean, and this is the credential that service expects.
+  ANTHROPIC_API_KEY: ${INFERENCE_API_KEY}
+
+  # Connection string for the least-privilege `mars_writer` role: INSERT on
+  # tickets, SELECT on tickets.id only, UPDATE on three columns of complaints.
+  # See db/grants.postgres.sql. The boundary is enforced by Postgres, not by
+  # trusting the prompt.
+  MARS_DATABASE_URL: ${MARS_DATABASE_URL}
+
+
+tools:
+  # Action Gateway, scoped to three GitHub tools and nothing else. The
+  # credential lives in an Action Gateway connection and is substituted when
+  # the tool executes, so unlike the database URL below it never enters the
+  # sandbox at all — that is the whole reason this route is worth an extra
+  # moving part.
+  #
+  # Slugs, not bare names: `create_issue` also exists in the jira and linear
+  # toolkits, and the bare name is ambiguous. Listing tools explicitly rather
+  # than a bare `do.actions` also keeps the other 1,197 tools in the
+  # catalogue — Jira, Supabase, Sentry, the DigitalOcean toolkit — out of
+  # reach of a sandbox that files complaints about cold coffee.
+  - do.actions:
+      tools: [github_create_issue, github_add_issue_labels, github_create_label]
+      # Hand the model these three with their input schemas up front, so it
+      # calls them directly instead of running action_search first. That is
+      # one fewer round-trip on every single complaint — visible latency in
+      # a demo where the room is watching the wall — and one fewer way for
+      # the issue step to fail before it has begun.
+      preload_tools: [github_create_issue, github_add_issue_labels, github_create_label]
+
+permissions:
+  # Scoped to one repository. The `match` map compares tool arguments, so a
+  # create naming any other owner/repo is refused by the session policy
+  # before it reaches Action Gateway — verified: a run pointed at a
+  # different repo came back "denied by the session policy" rather than a
+  # GitHub 404, which is how you tell policy from a bad repo name.
+  #
+  # ${GITHUB_ISSUE_OWNER} and ${GITHUB_ISSUE_NAME} are expanded by doctl at
+  # create time, so the stored template holds literals. The reference says
+  # match values must not contain $VAR expansions, and after expansion they
+  # do not.
+  #
+  # enforcement: best-effort, not strict. A strict rule naming a tool the
+  # adapter does not declare fails session creation outright, and opencode
+  # declares no capability for named tool rules. best-effort is what the
+  # platform actually honours here, and it did.
+  default: allow
+  rules:
+    - tool: do.actions/github_create_issue
+      match:
+        owner: ${GITHUB_ISSUE_OWNER}
+        repo: ${GITHUB_ISSUE_NAME}
+      action: allow
+      enforcement: best-effort
+    - tool: do.actions/github_create_issue
+      action: deny
+      enforcement: best-effort
+    - tool: do.actions/github_add_issue_labels
+      match:
+        owner: ${GITHUB_ISSUE_OWNER}
+        repo: ${GITHUB_ISSUE_NAME}
+      action: allow
+      enforcement: best-effort
+    - tool: do.actions/github_add_issue_labels
+      action: deny
+      enforcement: best-effort
+    - tool: do.actions/github_create_label
+      match:
+        owner: ${GITHUB_ISSUE_OWNER}
+        repo: ${GITHUB_ISSUE_NAME}
+      action: allow
+      enforcement: best-effort
+    - tool: do.actions/github_create_label
+      action: deny
+      enforcement: best-effort
+  filesystem:
+    mode: workspace-write
+
+egress: unrestricted
+# Deliberately unrestricted, and it is worth knowing why before you tighten it.
+#
+# The tidy version of this block is:
+#
+#   egress:
+#     allow_hosts: [${INFERENCE_HOST}, pypi.org, files.pythonhosted.org]
+#     allow_ips:   [${DB_PUBLIC_IP}]
+#
+# It does not work, and not for the reason it looks like. Re-tested
+# 2026-09-26 on a trigger-started session with the host allowlisted AND the
+# literal IP in allow_ips: port 25060 times out both ways. The sandbox's own
+# diagnosis is the clearest version of it — "The proxy is blocking port 25060
+# (Postgres). The proxy only allows HTTP/HTTPS ports." allow_ips chooses
+# which destinations are reachable, not which ports, so no allowlist form
+# reaches Managed Postgres at all.
+#
+# The failure is also expensive. The agent improvises rather than stopping:
+# 38 steps and $0.86, against $0.18 for a normal complaint.
+#
+# What still constrains this sandbox: it holds one credential, for a role that
+# can INSERT one table and read back one column (db/grants.postgres.sql).
+# That is the boundary doing the real work here, and it is unaffected.
+
+# No `vpc_uuid`. MARS rejects VPC attachment in every region available to this
+# team ("This VPC's region is not supported"), so the sandbox reaches Managed
+# Postgres over its public endpoint instead — TLS, a scoped role, and the
+# egress allowlist above. Re-add it here the moment your team can attach.
