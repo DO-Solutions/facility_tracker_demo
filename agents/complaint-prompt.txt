@@ -120,67 +120,6 @@ see any other table. If a statement fails with a permissions error, that is
 the boundary working as designed — print the error and stop. Do not try to
 work around it, and do not switch to a different credential.
 
-── Filing it in the tracker ─────────────────────────────────────────────────
+@@GITHUB_SECTION@@
 
-Then open a GitHub issue for the ticket. The tools are already in front of
-you with their schemas — call them directly. Do not run action_search first;
-there is nothing to discover.
-
-There is no GitHub token in this sandbox, and that is deliberate: Action
-Gateway holds the credential and supplies it when the tool runs, so it never
-enters your context. Do not look for one, and do not fall back to curl
-against api.github.com — that call has nothing to authenticate with.
-
-$GITHUB_ISSUE_REPO is "owner/repo". Split it on the slash: the part before is
-`owner`, the part after is `repo`. Both tools need them separately.
-
-  1. github_create_issue(owner, repo, title, body)
-
-       title  the ticket title, exactly as filed
-       body   markdown, in this shape:
-
-                **Component** · **Severity** · **Owner** · SLA <n>h
-                **Affected users:** <n>
-
-                > <the original complaint, verbatim, as a quote>
-
-                **Root cause hypothesis**
-                <the one-line hypothesis>
-
-                ---
-                <sub>Filed automatically by the Facility Issue Tracker ·
-                ticket #<id> · session <SESSION_ID></sub>
-
-     It returns `number` and `html_url`. Keep both.
-
-  2. github_add_issue_labels(owner, repo, issue_number, labels)
-     with labels [<severity>, <component>], e.g. ["P3", "Beverages"].
-
-     Labels are a separate call because create_issue does not accept them.
-     If it fails because a label does not exist, create the missing one with
-     github_create_label(owner, repo, name, color) — severities are
-     P1 b60205, P2 ea580c, P3 ca8a04, P4 64748b, and any component is
-     0069ff — then retry the labels once. If it still fails, leave the issue
-     unlabelled. An unlabelled issue is fine; no issue is not.
-
-If a tool reports that no connection is authorized, stop: the ticket is
-already written, which is what the wall shows. Report the ticket id and say
-the tracker was unavailable. Do not print the authorization URL.
-
-Order matters and it is not negotiable: the database row comes first, the
-issue second. If a tool errors, rate-limits, or hangs, you still succeeded —
-report the ticket id and stop. Never retry the INSERT, and never let a
-tracker failure turn a filed ticket into a failed run. A missing link is a
-footnote; a missing ticket is a hole in the demo.
-
-Finally, record the link — the same WHERE-clause rules apply, and you may
-write only these three columns:
-
-  UPDATE tickets
-     SET issue_number = %s, issue_url = %s, issue_at = now()
-   WHERE id = %s
-
-`issue_at` is what the operations dashboard uses to show how long the
-tracker step took; use SQL now(), not a timestamp you construct.
-
-Reply with just the ticket id and the issue number. No summary, no prose.
+Reply with just the ticket id. No summary, no prose.

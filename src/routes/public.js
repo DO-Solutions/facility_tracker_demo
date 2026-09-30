@@ -2,7 +2,6 @@ import express from 'express';
 import QRCode from 'qrcode';
 import { config } from '../config.js';
 import { submitComplaint } from '../lib/ingest.js';
-import { pingInference } from '../lib/inference.js';
 import { db } from '../db/index.js';
 import { formPage, thanksPage, qrPage, MAX_LENGTH } from '../lib/public-pages.js';
 
@@ -124,10 +123,10 @@ publicRouter.get('/qr.svg', async (req, res) => {
  * Liveness by default, and `?deep=1` for the things that actually break.
  *
  * The shallow check answers "is the process up", which App Platform wants
- * and which never fails interestingly. The deep one exercises the two
- * dependencies that fail silently and separately: the database, and the
- * inference credential. Worth hitting the morning of a talk, because a dead
- * model key looks exactly like a working demo until the closing summary.
+ * and which never fails interestingly. The deep one checks the database and
+ * that every trigger the app fires is configured. The model key is not
+ * checked here because this process no longer has one — it lives only in
+ * the agent sandboxes, and a dead key shows up in their execution history.
  *
  * It deliberately does not fire the intake triggers. Checking those means
  * spending a microVM per shard, and their health is already visible in the
@@ -143,11 +142,8 @@ publicRouter.get('/healthz', async (req, res) => {
     .then(() => ({ ok: true }))
     .catch((err) => ({ ok: false, error: err.message }));
 
-  checks.inference = await pingInference()
-    .then((r) => ({ ok: true, model: r.model }))
-    .catch((err) => ({ ok: false, error: err.message }));
-
   checks.intakeShards = { ok: config.ingest.shards.length > 0, count: config.ingest.shards.length };
+  checks.summaryTrigger = { ok: Boolean(config.ingest.summaryWebhookUrl) };
 
   const ok = Object.values(checks).every((c) => c.ok);
   res.status(ok ? 200 : 503).json({ ok, checks });

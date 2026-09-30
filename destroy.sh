@@ -27,7 +27,7 @@ STATE_FILE=".deploy-state.json"
 set -a; # shellcheck disable=SC1091
 source .env; set +a
 
-: "${STACK_NAME:=complaints-dept}"
+: "${STACK_NAME:=facility-tracker-demo}"
 [ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || die "DIGITALOCEAN_ACCESS_TOKEN is not set in .env"
 export DIGITALOCEAN_ACCESS_TOKEN
 

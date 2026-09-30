@@ -5,7 +5,7 @@ import express from 'express';
 import cookieParser from 'cookie-parser';
 import { config, validateConfig } from './config.js';
 import { initDb, closeDb } from './db/index.js';
-import { startTicketWatcher, startSessionWatcher } from './lib/ticket-watcher.js';
+import { startTicketWatcher } from './lib/ticket-watcher.js';
 import { publicRouter } from './routes/public.js';
 import { adminRouter } from './routes/admin.js';
 import { streamRouter } from './routes/stream.js';
@@ -92,7 +92,6 @@ const stops = [];
 async function main() {
   await initDb();
   stops.push(startTicketWatcher());
-  stops.push(startSessionWatcher());
 
   const server = app.listen(config.port, () => {
     const base = `http://localhost:${config.port}`;

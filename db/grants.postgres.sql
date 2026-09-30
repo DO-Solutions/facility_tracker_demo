@@ -5,7 +5,8 @@
 -- brief, enforced where it cannot be argued with: Postgres itself. The agent's
 -- action_code sandbox connects as `mars_writer`, which can insert a ticket and
 -- mark a complaint done. It cannot read complaint bodies it was not handed, it
--- cannot touch `summaries`, and it cannot DELETE or DROP anything at all.
+-- can add a summary but never read one, and it cannot DELETE or DROP anything
+-- at all.
 --
 -- Applied by deploy.sh. ${MARS_DB_PASSWORD} is substituted at deploy time.
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -44,17 +45,14 @@ GRANT USAGE  ON SEQUENCE tickets_id_seq TO mars_writer;
 -- agent still cannot read a single ticket it or anyone else has filed.
 GRANT SELECT (id) ON TABLE tickets TO mars_writer;
 
--- And the columns it fills in around the GitHub issue: three when it opens
--- one, and `issue_closed_at` when the close agent shuts one. Still no UPDATE
--- on anything describing the ticket itself.
+-- And the three columns it fills in once it has opened the GitHub issue.
+-- Still no UPDATE on anything describing the ticket itself, and none on
+-- `closed_at`, which is the app's column and not an agent's.
 --
--- The close agent reuses this role rather than getting a third. It is the
--- same job at a different time — maintaining the link between a ticket and
--- its issue — and a separate role for one more column would buy a line in
--- this file and a password to plumb through deploy.sh. What it cannot do is
--- unchanged: it still cannot read a ticket, a complaint body, or `closed_at`,
--- which is the app's column and not an agent's.
-GRANT UPDATE (issue_number, issue_url, issue_at, issue_closed_at) ON TABLE tickets TO mars_writer;
+-- `issue_closed_at` is no longer granted: the close agent that wrote it is
+-- gone, and issues are now only removed in bulk by Reset. The REVOKE ALL
+-- above strips the old grant from existing clusters.
+GRANT UPDATE (issue_number, issue_url, issue_at) ON TABLE tickets TO mars_writer;
 
 -- Close the loop on the complaint it was handed: three columns, no more.
 GRANT UPDATE (status, error, session_id) ON TABLE complaints TO mars_writer;
@@ -69,18 +67,30 @@ GRANT UPDATE (status, error, session_id) ON TABLE complaints TO mars_writer;
 -- Complaint bodies stay unreadable: `body` is not granted.
 GRANT SELECT (id) ON TABLE complaints TO mars_writer;
 
+-- The summary agent writes one row per press of "Generate now". It is handed
+-- the figures in its payload, so it needs no read access at all: INSERT on
+-- the four columns it fills, and the sequence behind `id`. No SELECT, not
+-- even on `id` — its statement has no RETURNING clause, and the prompt says
+-- so, because asking for one would fail the whole insert.
+--
+-- Same role again, for the reason the close agent shares it: one more
+-- narrowly scoped write is cheaper than a third password to plumb through.
+GRANT INSERT (total_tickets, top_components, headcount_ask, narrative) ON TABLE summaries TO mars_writer;
+GRANT USAGE ON SEQUENCE summaries_id_seq TO mars_writer;
+
 -- Explicitly denied, for the avoidance of doubt and for anyone reading this
 -- over your shoulder at the conference:
 --   complaints : no SELECT, no INSERT, no DELETE
 --   tickets    : no SELECT, no UPDATE, no DELETE
---   summaries  : no access of any kind
+--   summaries  : no SELECT, no UPDATE, no DELETE
 -- Future tables default to no access, since PUBLIC was revoked above.
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Retire mars_reporter.
 --
--- It existed for the scheduled summary agent, which no longer exists — the
--- summary is written in-process when an operator presses the button. Removing
+-- It existed for an earlier, scheduled summary agent that queried tickets
+-- itself. Today's summary agent is handed its figures and writes through
+-- mars_writer, so it needs no read role at all. Removing
 -- it from this file is not enough: the role would survive in the cluster with
 -- SELECT on tickets and nobody using it, which is the worst kind of leftover.
 --

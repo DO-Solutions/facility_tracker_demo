@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Check, Loader2, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ComplaintDetail } from '@/lib/api';
+import { useFeatures } from '@/lib/useFeatures';
 
 type Stage = {
   label: string;
@@ -11,12 +12,18 @@ type Stage = {
   dead?: boolean;
 };
 
-function stages(c: ComplaintDetail): Stage[] {
+function stages(c: ComplaintDetail, githubIssues: boolean): Stage[] {
   const failed = c.status === 'failed';
-  return [
+  const base: Stage[] = [
     { label: 'Submitted', detail: 'the form accepted it', at: c.submitted_at },
     { label: 'Webhook fired', detail: 'handed to Harness Runtime', at: c.dispatched_at ?? null, dead: failed },
     { label: 'Ticket written', detail: 'a microVM classified it and wrote the row', at: c.ticket?.created_at ?? null, dead: failed },
+  ];
+  // With GitHub issues off there is no fourth stage, rather than one that
+  // waits forever.
+  if (!githubIssues) return base;
+  return [
+    ...base,
     { label: 'Issue opened', detail: 'filed in the tracker via Action Gateway', at: c.ticket?.issue_at ?? null, dead: failed && !c.ticket },
   ];
 }
@@ -38,7 +45,8 @@ function human(ms: number) {
  */
 export function Progress({ complaint }: { complaint: ComplaintDetail }) {
   const [, tick] = useState(0);
-  const steps = stages(complaint);
+  const githubIssues = useFeatures()?.githubIssues ?? false;
+  const steps = stages(complaint, githubIssues);
   const done = steps.every((s) => s.at) || complaint.status === 'failed';
 
   // Only run a clock while something is still outstanding.

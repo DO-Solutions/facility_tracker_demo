@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Stats, Ticket, Sessions } from './api';
+import type { Stats, Ticket } from './api';
 
 type Feed = {
   tickets: Ticket[];
   stats: Stats | null;
-  sessions: Sessions | null;
   live: boolean;
   /** Bumped whenever a summary lands, so pages can refetch. */
   summaryTick: number;
@@ -20,7 +19,6 @@ type Feed = {
 export function useLiveFeed(seed: Ticket[] = [], max = 24): Feed {
   const [tickets, setTickets] = useState<Ticket[]>(seed);
   const [stats, setStats] = useState<Stats | null>(null);
-  const [sessions, setSessions] = useState<Sessions | null>(null);
   const [live, setLive] = useState(false);
   const [summaryTick, setSummaryTick] = useState(0);
   const retry = useRef(1000);
@@ -49,9 +47,6 @@ export function useLiveFeed(seed: Ticket[] = [], max = 24): Feed {
       source.addEventListener('stats', (e) =>
         setStats(JSON.parse((e as MessageEvent).data) as Stats),
       );
-      source.addEventListener('sessions', (e) =>
-        setSessions(JSON.parse((e as MessageEvent).data) as Sessions),
-      );
       source.addEventListener('summary', () => setSummaryTick((n) => n + 1));
 
       source.addEventListener('error', () => {
@@ -71,5 +66,5 @@ export function useLiveFeed(seed: Ticket[] = [], max = 24): Feed {
     };
   }, [max]);
 
-  return { tickets, stats, sessions, live, summaryTick };
+  return { tickets, stats, live, summaryTick };
 }

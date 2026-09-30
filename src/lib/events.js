@@ -15,7 +15,6 @@ export const EVENTS = {
   TICKET: 'ticket',
   COMPLAINT: 'complaint',
   STATS: 'stats',
-  SESSIONS: 'sessions',
   SUMMARY: 'summary',
 };
 

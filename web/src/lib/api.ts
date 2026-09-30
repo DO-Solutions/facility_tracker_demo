@@ -16,9 +16,6 @@ export type Ticket = {
   issue_url: string | null;
   // Written by the app the moment the operator clicks Close.
   closed_at: string | null;
-  // Written by the close agent once the GitHub issue is actually shut, about
-  // a minute later. Null while that is still in flight.
-  issue_closed_at: string | null;
   complaint_body?: string | null;
 };
 
@@ -75,7 +72,8 @@ export type Summary = {
   narrative: string;
 };
 
-export type Sessions = { total: number; running: number; paused: number; other: number };
+/** Optional parts of the pipeline, as deployed. See ENABLE_GITHUB_ISSUES. */
+export type Features = { githubIssues: boolean };
 
 class HttpError extends Error {
   // Written out rather than a parameter property: the project builds with
@@ -96,6 +94,7 @@ async function get<T>(path: string): Promise<T> {
 
 export const api = {
   stats: () => get<Stats>('/api/stats'),
+  features: () => get<Features>('/api/features'),
   tickets: (params: Record<string, string | number> = {}) => {
     const q = new URLSearchParams(
       Object.entries(params)
@@ -129,7 +128,7 @@ export const api = {
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new HttpError(res.status, json.error ?? 'Could not close the ticket.');
-    return json as { ticket: Ticket; tracker: string };
+    return json as { ticket: Ticket };
   },
 
   async reset() {
@@ -142,6 +141,11 @@ export const api = {
     return json as { database: string; tracker: string; nextTicket: number };
   },
 
+  /**
+   * Asks the summary agent for a new summary. Resolves once the request is
+   * accepted — the summary itself arrives about a minute later on the live
+   * feed, as a `summary` event.
+   */
   async generateSummary() {
     const res = await fetch('/api/summaries/run', {
       method: 'POST',
@@ -149,9 +153,9 @@ export const api = {
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: 'failed' }));
-      throw new HttpError(res.status, body.error ?? 'Could not generate the summary.');
+      throw new HttpError(res.status, body.error ?? 'Could not request the summary.');
     }
-    return res.json() as Promise<Summary>;
+    return res.json() as Promise<{ requested: boolean }>;
   },
 
   async complain(body: string) {

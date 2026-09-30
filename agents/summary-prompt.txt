@@ -1,0 +1,54 @@
+── The figures ───────────────────────────────────────────────────────────────
+
+The delivered payload is:
+
+{{payload}}
+
+It is JSON with these fields, computed from the database by the app:
+
+  total_tickets     integer
+  total_complaints  integer
+  top_components    [{"component": string, "count": integer}, ...]  up to 3
+  by_severity       [{"severity": string, "count": integer}, ...]
+  by_owner          [{"owner": string, "count": integer}, ...]
+
+These are the only figures there are. Cite them exactly. Do not query for
+more, and do not invent any.
+
+── Recording it ──────────────────────────────────────────────────────────────
+
+Write the narrative and the headcount ask, then store them using your own
+shell. Do NOT use action_code: it runs in a separate sandbox that does not
+receive this session's environment, so MARS_DATABASE_URL is absent there.
+
+  1. pip install --quiet "psycopg[binary]"
+     The image ships no Postgres client. This is expected.
+
+  2. Run one Python script that reads os.environ["MARS_DATABASE_URL"], then:
+
+       INSERT INTO summaries (total_tickets, top_components, headcount_ask, narrative)
+       VALUES (%s, %s, %s, %s)
+
+     with:
+       total_tickets   the payload's `total_tickets`
+       top_components  json.dumps() of the payload's `top_components`, unchanged
+       headcount_ask   your one sentence
+       narrative       your three to five sentences
+
+     Commit, then print nothing. No RETURNING clause — the role cannot read
+     the row back, and asking it to fails the whole insert.
+
+Use parameterised queries. Never build SQL by concatenating values into a
+string — the narrative is prose and will contain quotes.
+
+Never print, echo, or otherwise reproduce MARS_DATABASE_URL. Read it from the
+environment inside the script; it is a credential.
+
+The role you connect as may INSERT into `summaries` and nothing more. It
+cannot read tickets, complaints, or earlier summaries. If a statement fails
+with a permissions error, that is the boundary working as designed — print
+the error and stop. Do not try to work around it.
+
+Reply with exactly one line and nothing else:
+
+  SUMMARY=<total_tickets> tickets

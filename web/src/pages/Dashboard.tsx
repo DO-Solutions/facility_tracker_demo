@@ -1,24 +1,23 @@
 import { useEffect, useState } from 'react';
-import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Stat } from '@/components/Stat';
 import { Section } from '@/components/AdminShell';
 import { TicketCard } from '@/components/TicketCard';
 import { api, type Stats, type Summary, type Ticket } from '@/lib/api';
+import { useSummaryRequest } from '@/lib/useSummaryRequest';
+import { useFeatures } from '@/lib/useFeatures';
 
 export default function Dashboard({
-  stats: liveStats, sessions, tickets: liveTickets, summaryTick,
+  stats: liveStats, tickets: liveTickets, summaryTick,
 }: {
   stats: Stats | null;
-  sessions: { total: number; running: number; paused: number } | null;
   tickets: Ticket[];
   summaryTick: number;
 }) {
   const [seedStats, setSeedStats] = useState<Stats | null>(null);
   const [seed, setSeed] = useState<Ticket[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
-  const [busy, setBusy] = useState(false);
   // Closing a ticket updates a row that arrives here from the live feed,
   // which this page does not own. Keep the closed copies locally and lay
   // them over whichever list is being rendered.
@@ -38,17 +37,8 @@ export default function Dashboard({
   const maxComponent = Math.max(1, ...(stats?.byComponent ?? []).map((c) => c.count));
   const maxOwner = Math.max(1, ...(stats?.byOwner ?? []).map((o) => o.count));
 
-  async function generate() {
-    setBusy(true);
-    try {
-      setSummary(await api.generateSummary());
-      toast.success('Executive summary generated.');
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Could not generate the summary.');
-    } finally {
-      setBusy(false);
-    }
-  }
+  const { pending, request } = useSummaryRequest(summaryTick);
+  const githubIssues = useFeatures()?.githubIssues ?? false;
 
   return (
     <>
@@ -72,12 +62,7 @@ export default function Dashboard({
         <Stat label="Complaints received" value={stats?.complaints ?? 0} />
         <Stat label="In flight" value={stats?.processing ?? 0} tone="warn" sub="being triaged now" />
         <Stat label="Failed" value={stats?.failed ?? 0} tone="bad" />
-        <Stat
-          label="MARS sessions"
-          value={sessions?.total ?? '—'}
-          sub={sessions ? `${sessions.running} running · ${sessions.paused} paused` : 'awaiting census'}
-        />
-        <Stat label="Pipeline" value={<span className="text-[19px]">harness</span>} sub="Action Gateway → GitHub" />
+        <Stat label="Pipeline" value={<span className="text-[19px]">harness</span>} sub={githubIssues ? 'Action Gateway → GitHub' : 'tickets only'} />
       </div>
 
       <Section>Latest tickets</Section>
@@ -131,8 +116,8 @@ export default function Dashboard({
         <Empty>
           No summary generated yet.
           <div className="mt-3.5">
-            <Button onClick={generate} disabled={busy}>
-              {busy ? 'Generating…' : 'Generate now'}
+            <Button onClick={request} disabled={pending}>
+              {pending ? 'Agent writing…' : 'Generate now'}
             </Button>
           </div>
         </Empty>

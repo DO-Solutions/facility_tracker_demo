@@ -83,10 +83,9 @@ export const config = {
     // Every intake trigger, round-robined by fireWebhook. One entry means
     // one complaint at a time, which is the platform's behaviour per trigger.
     shards: intakeShards(),
-    // Fires the close agent, which closes one ticket's GitHub issue.
-    // Optional: without it the Close button still closes the ticket.
-    closeWebhookUrl: process.env.CLOSE_WEBHOOK_URL || '',
-    closeWebhookSecret: process.env.CLOSE_WEBHOOK_SECRET || '',
+    // Fires the summary agent, which writes one executive summary row.
+    summaryWebhookUrl: process.env.SUMMARY_WEBHOOK_URL || '',
+    summaryWebhookSecret: process.env.SUMMARY_WEBHOOK_SECRET || '',
     webhookSecret: process.env.MARS_WEBHOOK_SECRET || '',
     ticketTable: process.env.MARS_TICKET_TABLE || 'tickets',
   },
@@ -96,25 +95,17 @@ export const config = {
   // token reaches a sandbox. This one exists solely so the Reset button can
   // *delete* issues between rehearsals — a capability Action Gateway
   // deliberately does not expose to agents. See src/lib/github-admin.js.
-  // Optional: without it, reset closes issues instead of deleting them.
+  // Optional: without it, Reset leaves the tracker alone.
+  //
+  // `enabled` follows ENABLE_GITHUB_ISSUES by way of deploy.sh, which leaves
+  // GITHUB_ISSUE_REPO empty when the integration is off — so the repo being
+  // set is the one signal, here and in the agents.
   github: {
     issueRepo: process.env.GITHUB_ISSUE_REPO || '',
     issueToken: process.env.GITHUB_ISSUE_TOKEN || '',
-  },
-
-  // DigitalOcean serverless inference. Anthropic-compatible Messages API, so
-  // the Anthropic SDK is used as the client with a swapped baseURL.
-  inference: {
-    baseUrl: process.env.INFERENCE_BASE_URL || 'https://inference.do-ai.run',
-    apiKey: process.env.INFERENCE_API_KEY || process.env.DIGITALOCEAN_ACCESS_TOKEN || '',
-    // A DigitalOcean model slug, not an Anthropic model id.
-    // See: doctl serverless-inference models list
-    model: process.env.INFERENCE_MODEL || 'anthropic-claude-opus-5',
-  },
-
-  // Used by the dashboard to show live MARS session counts.
-  digitalocean: {
-    token: process.env.DIGITALOCEAN_ACCESS_TOKEN || '',
+    get enabled() {
+      return Boolean(this.issueRepo);
+    },
   },
 
   // How often the dashboard polls the DB for rows the agent wrote directly.
@@ -141,11 +132,9 @@ export function validateConfig() {
       'No intake trigger configured (MARS_WEBHOOK_SHARDS or MARS_WEBHOOK_URL). For a local run against the deployed triggers: ./scripts/link-local.sh > .env.local',
     );
   }
-  if (!config.inference.apiKey) {
-    problems.push(
-      'INFERENCE_API_KEY is not set (a DigitalOcean model access key, or a PAT with all scopes)',
-    );
-  }
+  // No check for SUMMARY_WEBHOOK_URL. Like the close trigger it is one
+  // button's worth of functionality, so its absence is reported by
+  // /healthz?deep=1 and by the button itself rather than refusing to boot.
   if (config.isProd && config.admin.sessionSecret === 'dev-only-change-me') {
     problems.push('SESSION_SECRET is still the default — set a real one in production');
   }

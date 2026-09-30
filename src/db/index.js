@@ -60,7 +60,6 @@ function mapTicket(r) {
     sla_hours: Number(r.sla_hours),
     created_at: iso(r.created_at),
     closed_at: r.closed_at ? iso(r.closed_at) : null,
-    issue_closed_at: r.issue_closed_at ? iso(r.issue_closed_at) : null,
   };
 }
 
@@ -179,10 +178,9 @@ export async function insertTicket(t) {
 /**
  * Close one ticket.
  *
- * `closed_at` is ours and is written here and now — the operator clicked, so
- * the row is closed before anything is asked of an agent. Closing the GitHub
- * issue happens separately and later; `issue_closed_at` is the agent's column
- * and stays null until it confirms.
+ * `closed_at` is written here and now. The GitHub issue is not touched —
+ * Reset empties the tracker between run-throughs. (`issue_closed_at` is a
+ * leftover column from a retired close agent; nothing writes it.)
  *
  * Returns null if there is no such ticket, and the existing row untouched if
  * it was already closed, so a double click is not an error.
@@ -359,14 +357,16 @@ export async function nextTicketNumber() {
 
 /* ── executive summaries ────────────────────────────────────────────────── */
 
-export async function insertSummary({ totalTickets, topComponents, headcountAsk, narrative }) {
-  const row = await db().get(
-    `INSERT INTO summaries (total_tickets, top_components, headcount_ask, narrative)
-     VALUES (?, ?, ?, ?)
-     RETURNING *`,
-    [totalTickets, JSON.stringify(topComponents), headcountAsk, narrative],
-  );
-  return mapSummary(row);
+// Rows are written by the summary agent, not here. These two let the
+// watcher notice them, the same way it notices tickets.
+export async function maxSummaryId() {
+  const row = await db().get('SELECT COALESCE(MAX(id), 0) AS n FROM summaries');
+  return Number(row.n);
+}
+
+export async function summariesAfter(afterId) {
+  const rows = await db().all('SELECT * FROM summaries WHERE id > ? ORDER BY id ASC', [afterId]);
+  return rows.map(mapSummary);
 }
 
 export async function latestSummary() {

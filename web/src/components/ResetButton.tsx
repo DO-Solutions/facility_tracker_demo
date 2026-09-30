@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { api } from '@/lib/api';
+import { useFeatures } from '@/lib/useFeatures';
 
 /**
  * Wipes the demo between rehearsals.
@@ -26,6 +27,7 @@ export function ResetButton() {
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
+  const githubIssues = useFeatures()?.githubIssues ?? false;
 
   async function run() {
     setBusy(true);
@@ -66,15 +68,19 @@ export function ResetButton() {
               <p>
                 Deletes every complaint, ticket and summary. This cannot be undone.
               </p>
-              <p>
-                Every issue in the tracker is <strong>deleted</strong>, not just closed, so the
-                next run-through starts on an empty board. Ticket numbering continues from
-                GitHub's next issue number, so ticket #N stays issue #N.
-              </p>
-              <p className="text-muted-foreground text-[13px]">
-                Deleting needs a credential the demo itself does not have — the agents can only
-                open and close issues. Reset is stage machinery, not part of the demo.
-              </p>
+              {githubIssues && (
+                <>
+                  <p>
+                    Every issue in the tracker is <strong>deleted</strong>, not just closed, so
+                    the next run-through starts on an empty board. Ticket numbering continues
+                    from GitHub's next issue number, so ticket #N stays issue #N.
+                  </p>
+                  <p className="text-muted-foreground text-[13px]">
+                    Deleting needs a credential the demo itself does not have — the agents can
+                    only open and label issues. Reset is stage machinery, not part of the demo.
+                  </p>
+                </>
+              )}
             </div>
           </AlertDialogDescription>
         </AlertDialogHeader>

@@ -16,7 +16,7 @@ import Wall from '@/pages/Wall';
  * Toaster lives here rather than at the app root for the same reason.
  */
 export default function Admin() {
-  const { tickets, stats, sessions, live, summaryTick } = useLiveFeed([], 24);
+  const { tickets, stats, live, summaryTick } = useLiveFeed([], 24);
   const { pathname } = useLocation();
 
   // The wall is projected, so it gets the whole screen — no nav, no chrome.
@@ -38,7 +38,6 @@ export default function Admin() {
             element={
               <Dashboard
                 stats={stats}
-                sessions={sessions}
                 tickets={tickets}
                 summaryTick={summaryTick}
               />

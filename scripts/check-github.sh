@@ -25,6 +25,10 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 [ -f .env ] || { echo "no .env" >&2; exit 2; }
 set -a; . ./.env; set +a
+case "$(printf '%s' "${ENABLE_GITHUB_ISSUES:-false}" | tr '[:upper:]' '[:lower:]')" in
+  true|1|yes|on) ;;
+  *) echo "off — ENABLE_GITHUB_ISSUES is not true" >&2; exit 2 ;;
+esac
 [ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || { echo "DIGITALOCEAN_ACCESS_TOKEN not set" >&2; exit 2; }
 export DIGITALOCEAN_ACCESS_TOKEN
 

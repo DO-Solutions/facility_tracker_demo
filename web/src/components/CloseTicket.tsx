@@ -9,13 +9,12 @@ import { api, type Ticket } from '@/lib/api';
  * Close one ticket.
  *
  * No confirmation dialog, deliberately. Reset asks you to type a word because
- * it wipes everything; this closes one row and reopening an issue is a click
- * in GitHub. On stage the cost of an accidental close is far lower than the
- * cost of a modal between you and the point you were making.
+ * it wipes everything; this closes one row. On stage the cost of an
+ * accidental close is far lower than the cost of a modal between you and the
+ * point you were making.
  *
- * The ticket closes immediately. Its GitHub issue closes a minute or so
- * later, because only a trigger-started session can reach Action Gateway —
- * so the toast says which of the two just happened.
+ * It closes the ticket in the app only. The GitHub issue stays open until
+ * Reset empties the tracker between run-throughs.
  */
 export function CloseTicketButton({
   ticket,
@@ -28,21 +27,14 @@ export function CloseTicketButton({
 }) {
   const [busy, setBusy] = useState(false);
 
-  if (ticket.closed_at) return <ClosedBadge ticket={ticket} />;
+  if (ticket.closed_at) return <ClosedBadge />;
 
   async function run() {
     setBusy(true);
     try {
       const r = await api.closeTicket(ticket.id);
       onClosed?.(r.ticket);
-      toast.success(`Ticket #${ticket.id} closed.`, {
-        description:
-          r.tracker === 'closing'
-            ? `An agent is closing issue #${ticket.issue_number} in the tracker.`
-            : r.tracker === 'already closed'
-              ? 'The tracker issue was already closed.'
-              : `Tracker: ${r.tracker}`,
-      });
+      toast.success(`Ticket #${ticket.id} closed.`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not close the ticket.');
     } finally {
@@ -64,29 +56,15 @@ export function CloseTicketButton({
   );
 }
 
-/**
- * What replaces the button. `closed_at` is ours and is already true;
- * `issue_closed_at` is the agent's and lands a minute later, so until it does
- * the badge says the tracker is still catching up rather than claiming both.
- */
-export function ClosedBadge({ ticket }: { ticket: Ticket }) {
-  const trackerPending = ticket.issue_number != null && !ticket.issue_closed_at;
-
+/** What replaces the button once the ticket is closed. */
+export function ClosedBadge() {
   return (
     <Badge
       variant="outline"
       className="text-muted-foreground gap-1 font-normal whitespace-nowrap"
-      title={
-        trackerPending
-          ? 'Ticket closed. An agent is still closing the GitHub issue.'
-          : 'Ticket closed.'
-      }
+      title="Ticket closed."
     >
-      {trackerPending ? (
-        <Loader2 className="size-3 animate-spin" />
-      ) : (
-        <Check className="size-3" />
-      )}
+      <Check className="size-3" />
       Closed
     </Badge>
   );

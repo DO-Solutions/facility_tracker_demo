@@ -1,24 +1,23 @@
 # Facility Issue Tracker
 
-A live demo for DigitalOcean **Managed Agents Runtime Services**.
+A live demo for DigitalOcean **Managed Agents Runtime Services** (Harness
+Runtime).
 
-A QR code on screen points at a form with one field: *"Complain about anything.
-One sentence."* Every submission spawns its own microVM, which takes the
-grievance completely seriously and files it as an enterprise incident ticket.
-The room watches its own nonsense land on a wall in real time.
+A QR code points the room at a one-field form: *"Complain about anything. One
+sentence."* Each submission starts its own microVM, where an agent files it as
+a deadpan enterprise incident ticket. The room watches the tickets land on a
+wall.
 
 > *"The lift plays jazz."*
 > → **P4** · Elevators & Vertical Transit · owner Facilities · SLA 168h
 > **Unsolicited Ambient Music Genre Broadcast Within Vertical Transit Infrastructure**
-> *Elevator audio subsystem defaulted to jazz preset following maintenance cycle firmware reset.*
 
-Every card on that wall is a webhook, a fresh microVM, an LLM call, a database
-write, a GitHub issue, and a live push to the browser — about a minute, end to
-end, for roughly 20¢.
+Filing each ticket as a GitHub issue is **optional and off by default** — the
+demo runs on the harness alone. See [GitHub issues](#github-issues-optional).
 
 ---
 
-## What happens when someone submits
+## How it works
 
 ```mermaid
 sequenceDiagram
@@ -47,12 +46,14 @@ sequenceDiagram
     VM->>PG: INSERT the ticket
     Note over VM,PG: ticket first — everything after this is a bonus
 
-    VM->>AG: github_create_issue
-    AG->>GH: credential added here, never in the sandbox
-    GH-->>AG: issue number + url
-    AG-->>VM: issue number + url
-    VM->>AG: github_add_issue_labels
-    VM->>PG: link the issue to the ticket
+    opt ENABLE_GITHUB_ISSUES=true
+        VM->>AG: github_create_issue
+        AG->>GH: credential added here, never in the sandbox
+        GH-->>AG: issue number + url
+        AG-->>VM: issue number + url
+        VM->>AG: github_add_issue_labels
+        VM->>PG: link the issue to the ticket
+    end
     Note over VM: sandbox is discarded
 
     Wall->>PG: poll
@@ -60,65 +61,82 @@ sequenceDiagram
     Note over Wall: card lands, counter ticks
 ```
 
-The web tier never sees the ticket get written. That is the point of the
-shape: 200 people can submit at once and the form stays instant, because
-nothing on the request path waits for an agent.
-
-### Throughput
-
-Eight complaints at a time, because there are eight intake triggers.
-
-A Harness Runtime trigger runs exactly **one session at a time** — a platform
-behaviour with no setting on the trigger to change it. But the limit is per
-trigger rather than per team, so `deploy.sh` creates a pool of identical
-intake triggers and the app round-robins across them. Concurrency is just the
-pool size.
-
-Measured on the deployed stack: **eight complaints submitted within two
-seconds all finished within 89 seconds.** Through a single trigger the last
-of them would have landed around the eight-minute mark.
-
-`INTAKE_SHARDS` in `.env` sets the pool size, default 8. Triggers cost
-nothing to create and only running sessions are billed, so raise it for a
-bigger room — verified working at 8, and lowering it removes the extras on
-the next deploy.
+- **Nothing on the request path waits for an agent.** The form answers
+  instantly; the ticket appears on the wall 20–45 seconds later.
+- **The executive summary is a second agent, same shape.** **Generate now**
+  sends the ticket figures to a summary trigger; its microVM writes the
+  summary to Postgres, and the dashboard picks it up.
+- **The web app never calls the model.** Both agents run in sandboxes, and
+  only they hold the model key.
+- **Eight complaints at a time.** A trigger runs one session at a time, so
+  `deploy.sh` creates a pool of eight and the app round-robins across them.
+  Eight submitted together all finished within 89 seconds.
 
 ---
 
-## Deploy it
+## Deploy
 
-You need `doctl` (authenticated), `node` 22+, `jq`, and a GitHub repo the
-DigitalOcean GitHub app can read.
+You need `doctl` (authenticated), Node 22+, `jq`, and a fork of this repo that
+the DigitalOcean GitHub app can read. The fork is only where App Platform
+builds from; filing issues is a separate, optional step
+([below](#github-issues-optional)).
 
 ```bash
-cp .env.example .env     # DIGITALOCEAN_ACCESS_TOKEN, GITHUB_REPO, ADMIN_PASSWORD
-./deploy.sh
+cp .env.example .env    # fill in the four REQUIRED values
+./deploy.sh             # safe to re-run
+./destroy.sh            # removes everything deploy.sh created
 ```
 
 ```mermaid
-flowchart TD
-    D["./deploy.sh"] --> PG[("Managed Postgres<br/><small>schema · mars_writer role</small>")]
-    D --> WH["Webhook trigger<br/><small>one microVM per complaint</small>"]
-    D --> CL["Close trigger<br/><small>closes one ticket's issue</small>"]
-    D --> APP["App Platform<br/><small>form · dashboard · wall</small>"]
-    C["./scripts/connect-github.sh<br/><small>OAuth — you click this one</small>"] --> AG["GitHub connection<br/><small>Action Gateway holds the credential</small>"]
+flowchart LR
+    D["./deploy.sh"] --> PG[("Postgres<br/><small>schema · least-privilege role</small>")]
+    D --> IT["Intake triggers ×8"]
+    D --> ST["Summary trigger"]
+    D --> APP["App Platform"]
+    C["./scripts/connect-github.sh"] -.->|"only with GitHub issues on"| AG["GitHub connection"]
 ```
 
-Re-running is safe; every step checks for what it already made.
+### Required
 
-Then one step that cannot be automated, because it is OAuth — authorizing
-GitHub, so the agents can file issues:
+| Variable | What it is |
+| --- | --- |
+| `DIGITALOCEAN_ACCESS_TOKEN` | Your API token. Used by the scripts only. |
+| `INFERENCE_API_KEY` | A [model access key](https://cloud.digitalocean.com/gen-ai/model-access-keys), **not** the API token. Given to the agents only. |
+| `ADMIN_PASSWORD` | Password for `/admin`. |
+| `GITHUB_REPO` | Your fork, as `owner/repo`. App Platform builds from it. |
 
-```bash
-./scripts/connect-github.sh    # prints a link; open it, approve
-```
+### Optional
 
-Skip it and the demo still works, minus the issues. `deploy.sh` tells you
-which of the two states you are in rather than assuming.
+Changes take effect on the next `./deploy.sh`.
 
-**Cost while it's up:** about $5/mo for the app and $15/mo for the database,
-plus roughly **20¢ per complaint** in sandbox time and tokens — call it $20
-for a 100-person room. `./destroy.sh` removes all of it.
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `ENABLE_GITHUB_ISSUES` | `false` | `true`: each ticket also opens a labelled GitHub issue. See below. |
+| `GITHUB_ISSUE_REPO` | — | Where issues go, as `owner/repo`. Required when GitHub issues are on. |
+| `GITHUB_ISSUE_TOKEN` | — | Lets **Reset** delete the tracker's issues. See `.env.example`. |
+| `AG_SCOPES` | `repo,read:user` | OAuth scopes `connect-github.sh` asks for. |
+| `INFERENCE_MODEL` | `qwen3.8-max` | Model the agents use. `doctl serverless-inference models list` |
+| `INFERENCE_BASE_URL` | `https://inference.do-ai.run` | DigitalOcean inference endpoint. |
+| `STACK_NAME` | `facility-tracker-demo` | Name prefix for every resource. Lowercase letters, numbers and hyphens only. |
+| `DO_REGION` | `nyc3` | Region for the app and database. |
+| `INTAKE_SHARDS` | `8` | Complaints processed at once. |
+| `APP_SIZE` / `DB_SIZE` | `basic-xxs` / `db-s-1vcpu-1gb` | Instance sizes. |
+| `GITHUB_BRANCH` | `main` | Branch App Platform builds. |
+| `PORT`, `NODE_ENV`, `SESSION_SECRET` | local defaults | Local runs only. |
+
+### GitHub issues (optional)
+
+Off by default: the demo is the harness alone, and the agent gets no GitHub
+tools. To file an issue per ticket:
+
+1. In `.env`, set `ENABLE_GITHUB_ISSUES=true` and `GITHUB_ISSUE_REPO` to a
+   repo kept for this. **Reset deletes its issues.**
+2. Run `./deploy.sh`.
+3. Run `./scripts/connect-github.sh` and approve the link it prints (OAuth,
+   so this step is yours).
+
+The GitHub credential stays in Action Gateway and never enters a sandbox.
+`./scripts/check-github.sh` reports whether issues are actually being filed.
 
 ---
 
@@ -126,106 +144,57 @@ for a 100-person room. `./destroy.sh` removes all of it.
 
 | Screen | URL |
 | --- | --- |
-| Project this first | `/qr` — full-screen QR pointing at the form |
-| Project this during | `/admin/wall` — the live card wall |
-| For you | `/admin` — volumes, filters, the summary |
+| Project first | `/qr` — full-screen QR code |
+| Project during | `/admin/wall` — the live wall |
+| For you | `/admin` — dashboard, tickets, summary |
 
-Sign in with `ADMIN_PASSWORD`.
+1. **Put the QR up** and let the room submit. Watch "In flight" rise and fall.
+2. **Close with the executive summary.** Press **Generate now** on
+   `/admin/summary` about 30 seconds before you want it: an agent writes it
+   and it appears on its own.
+3. **Reset demo** (next to Sign out) wipes the database before the next
+   run-through. With GitHub issues on, it also deletes the tracker's issues.
 
-**The arc.** Put the QR up and let the room submit. The first card lands in
-about a minute and the rest follow roughly a minute apart. The session counter
-on the wall ticks as sandboxes come and go — that's the scale story, without
-anyone saying the word. Close with the executive summary: total tickets, top
-three components, and a straight-faced headcount ask for Facilities. Press **Generate now** on
-`/admin/summary` when you want it.
+**Close** on a ticket closes it in the app only.
 
-**Closing one ticket.** Every row on `/admin/tickets`, and every card on the
-dashboard, has a **Close** button. The ticket closes immediately; its GitHub
-issue is closed a minute or so later by an agent, because only a
-trigger-started session can reach Action Gateway. The badge says which of the
-two has happened. The projected wall has no Close button on purpose.
-
-**Reset demo**, beside Sign out, wipes the database and **deletes** every
-issue in the tracker, so the next run-through starts on an empty board.
-Ticket numbering continues from GitHub's next issue number, so ticket #N
-stays issue #N. Takes about twenty seconds for twenty issues.
-
-Deleting needs a credential the demo itself does not have — the agents can
-open and close issues through Action Gateway and nothing more. `GITHUB_ISSUE_TOKEN`
-is stage machinery, not part of the demo, and `.env.example` says so at
-length. Leave it unset and everything still works; reset just leaves the
-tracker alone.
-
-**Rehearsing.** `node scripts/seed.js --fake -n 20` fills the wall instantly:
-no agents, no cost, deterministic rows. Use it for layout and for checking the
-projector.
-
-Dropping `--fake` runs the real thing — one microVM and one GitHub issue per
-complaint, one after another. That is the only way to rehearse the agent, but
-it spends sandbox time and leaves real issues in the tracker.
-`npm run db:reset -- --yes` wipes the database between run-throughs (it names
-the cluster before it does anything); the issues you close or delete yourself.
+**Rehearsing:** `node scripts/seed.js --fake -n 20` fills the wall instantly,
+with no agents. Without `--fake` it runs the real pipeline.
+`npm run db:reset -- --yes` wipes the database.
 
 ---
 
-## Running it locally
+## Run locally
 
-There is no local database. A local run points at the cluster you deployed,
-so what you develop against is what the demo runs on — and it is also how you
-present if the venue blocks your App Platform URL.
+There is no local database: a local run uses the deployed cluster and
+triggers, so submissions still start real microVMs. It is also your fallback
+if the venue blocks the App Platform URL.
 
 ```bash
 npm install
 ./scripts/link-local.sh > .env.local
-npm run dev
+npm run dev             # http://localhost:3000
 ```
 
-```mermaid
-flowchart LR
-    L["npm run dev<br/><small>localhost:3000</small>"] -->|reads| PG[("Managed Postgres")]
-    L -->|signed webhook| T["Harness Runtime trigger"]
-    T --> V["microVM session"]
-    V -->|writes| PG
-    V -->|Action Gateway| GH["GitHub issues"]
-    A["App Platform<br/><small>still running</small>"] -->|reads| PG
-```
-
-Submissions still fire the live trigger and still spawn real microVMs; only
-the web tier has moved. There is no in-process shortcut — the agent's
-instructions live in `agents/complaint-prompt.txt` and that is the only copy,
-so what you test is what the demo runs.
-
-Iterating on that prompt: edit it, `./deploy.sh` to push it to the trigger,
-then submit. For layout and CSS work, `node scripts/seed.js --fake -n 20`
-fills the wall instantly without touching an agent.
+To change an agent's behaviour, edit its prompt in `agents/`, then
+`./deploy.sh`.
 
 ---
 
-## Worth knowing
+## Security at a glance
 
-- **Nothing fails closed.** Model output is snapped to the controlled
-  vocabulary rather than validated strictly — a slightly-wrong ticket beats a
-  missing one in front of an audience.
-- **Submissions are data, not instructions.** Anything trying to give the
-  agent orders gets filed under `Human Factors`.
-- **The agent's database role can insert a ticket, close a complaint and link
-  an issue — nothing else.** It cannot read what anyone wrote, and cannot
-  delete. Enforced by Postgres grants, asserted at deploy time.
-- **Each ticket also opens a GitHub issue**, labelled by severity and
-  component, through Action Gateway — which holds the credential and supplies
-  it when the tool runs, so no GitHub token ever reaches the sandbox. The
-  database row is written first and the issue second, so a tracker failure
-  costs a link, not a ticket.
-- **Authorize GitHub with `./scripts/connect-github.sh`, not the control
-  panel.** Action Gateway resolves a connection by *actor*, and a
-  trigger-started session runs as your DigitalOcean account UUID — not your
-  username. A connection authorized against any other actor is invisible
-  here, and the only symptom is issues silently never appearing. The script
-  always targets the right one.
-- **Where the minute goes.** Tool execution is about 10s of it; the rest is
-  sandbox startup and model generation. Installing the Postgres client the
-  image lacks costs under 2s, so that is not the thing to optimise.
-- **The form is rate limited** (12 per IP per minute), and the inference
-  service allows 240 requests/minute per team. Neither is the constraint
-  today — the one-run-at-a-time trigger is.
+| Credential | Who holds it |
+| --- | --- |
+| DigitalOcean API token | The deploy scripts, on your machine |
+| Model access key | The agents only |
+| `mars_writer` database role | The agents. It can insert tickets and summaries and fill in a few status columns; it cannot read what anyone wrote, or delete. Checked on every deploy. |
+| GitHub OAuth *(GitHub issues on only)* | Action Gateway, substituted when a tool runs |
+| `GITHUB_ISSUE_TOKEN` *(GitHub issues on only)* | The web app, for Reset only |
+
+- **Submissions are data, not instructions.** Attempts to give the agent
+  orders get filed under `Human Factors`.
+- **The ticket is written before anything else**, so a GitHub failure loses a
+  link, never a ticket.
+- **Authorize GitHub with the script, not the control panel.** Action Gateway
+  matches connections by actor, and the script picks the right one.
+- **The form is rate limited** to 8 submissions per IP per minute (`RATE_MAX` in the app spec).
 

@@ -11,8 +11,7 @@ import {
   closeTicket,
 } from '../db/index.js';
 import { COMPONENTS, SEVERITIES } from '../lib/ticket-schema.js';
-import { generateSummary } from '../lib/summarize.js';
-import { sessionCensus, fireCloseIssueWebhook } from '../lib/mars.js';
+import { requestSummary } from '../lib/summarize.js';
 import { clearTracker, tokenConfigured } from '../lib/github-admin.js';
 import {
   checkPassword,
@@ -55,16 +54,6 @@ adminRouter.get('/stats', async (req, res, next) => {
   }
 });
 
-adminRouter.get('/sessions', async (req, res) => {
-  try {
-    res.json((await sessionCensus()) ?? { total: 0, running: 0, paused: 0, other: 0 });
-  } catch {
-    // A dashboard that 500s because the census failed is worse than one
-    // showing a dash.
-    res.json({ total: 0, running: 0, paused: 0, other: 0 });
-  }
-});
-
 adminRouter.get('/tickets', async (req, res, next) => {
   try {
     const limit = Math.min(200, Number.parseInt(String(req.query.limit ?? '50'), 10) || 50);
@@ -84,16 +73,11 @@ adminRouter.get('/tickets', async (req, res, next) => {
 });
 
 /**
- * Close one ticket.
+ * Close one ticket, in the app only.
  *
- * Two halves that fail independently, the same shape as /reset. Closing the
- * row is ours and always happens; closing the GitHub issue is the agent's
- * job, fired as a webhook so it runs under the actor the GitHub connection
- * is authorized against.
- *
- * The response does not wait for the tracker. A trigger runs one execution
- * at a time, so closing several tickets in a row would otherwise queue the
- * UI behind a minute of agent time per click.
+ * Its GitHub issue is left open on purpose. The tracker is emptied in one go
+ * by Reset, between run-throughs; closing issues one by one would need an
+ * agent per click for no benefit to the demo.
  */
 adminRouter.post('/tickets/:id/close', async (req, res, next) => {
   const id = Number.parseInt(String(req.params.id), 10);
@@ -104,25 +88,7 @@ adminRouter.post('/tickets/:id/close', async (req, res, next) => {
   try {
     const ticket = await closeTicket(id);
     if (!ticket) return res.status(404).json({ error: 'no such ticket' });
-
-    let tracker = 'skipped — no issue on this ticket';
-    if (ticket.issue_number && !ticket.issue_closed_at) {
-      try {
-        const { fired, reason } = await fireCloseIssueWebhook({
-          ticketId: ticket.id,
-          issueNumber: ticket.issue_number,
-        });
-        tracker = fired ? 'closing' : `skipped — ${reason}`;
-      } catch (err) {
-        // The ticket is closed; do not fail the request over the tracker.
-        console.error(`[admin] close trigger for ticket ${id} failed:`, err.message);
-        tracker = `failed — ${err.message}`;
-      }
-    } else if (ticket.issue_closed_at) {
-      tracker = 'already closed';
-    }
-
-    res.json({ ticket, tracker });
+    res.json({ ticket });
   } catch (err) {
     next(err);
   }
@@ -157,9 +123,11 @@ adminRouter.get('/summaries', async (req, res, next) => {
   }
 });
 
+// 202, not 200: the summary is written by an agent and lands about a minute
+// later, through the same live feed as tickets.
 adminRouter.post('/summaries/run', async (req, res) => {
   try {
-    res.json(await generateSummary());
+    res.status(202).json(await requestSummary());
   } catch (err) {
     console.error('[admin] summary failed:', err.message);
     res.status(500).json({ error: err.message });
@@ -170,10 +138,10 @@ adminRouter.post('/summaries/run', async (req, res) => {
  * Reset the demo between rehearsals.
  *
  * Two halves, and they fail independently on purpose. The database wipe is
- * ours and always happens. Closing the tracker's issues is the agent's job,
- * fired as a webhook so it runs under the actor the GitHub connection is
- * authorized against — if that is not configured or not authorized, the
- * wipe still succeeds and the response says the tracker was left alone.
+ * ours and always happens. The tracker is emptied by deleting every issue
+ * with GITHUB_ISSUE_TOKEN (src/lib/github-admin.js) — no agent involved. If
+ * that token is not configured or the delete fails, the wipe still succeeds
+ * and the response says the tracker was left alone.
  *
  * Ticket numbering continues from the highest issue this demo has filed,
  * because GitHub never reuses a number. Restarting at 1 would put ticket #1
@@ -189,7 +157,9 @@ adminRouter.post('/reset', async (req, res) => {
   // first would mean guessing.
   let nextIssue = null;
   try {
-    if (tokenConfigured()) {
+    if (!config.github.enabled) {
+      result.tracker = 'off — GitHub issues are not enabled';
+    } else if (tokenConfigured()) {
       const { deleted, nextIssue: next, failures } = await clearTracker();
       nextIssue = next;
       result.tracker =
@@ -224,4 +194,9 @@ adminRouter.post('/reset', async (req, res) => {
 /** Vocabularies for the filter dropdowns. */
 adminRouter.get('/vocab', (req, res) => {
   res.json({ components: COMPONENTS, severities: SEVERITIES });
+});
+
+/** Which optional parts of the pipeline are switched on, for the UI. */
+adminRouter.get('/features', (req, res) => {
+  res.json({ githubIssues: config.github.enabled });
 });

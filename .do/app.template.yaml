@@ -108,27 +108,15 @@ services:
         type: SECRET
         value: ${GITHUB_ISSUE_TOKEN}
 
-      # Fires the close agent from a ticket's Close button. Optional:
-      # without it the button still closes the ticket.
-      - key: CLOSE_WEBHOOK_URL
+      # Fires the summary agent from "Generate now". No INFERENCE_* here, on
+      # purpose: the app never calls the model, so it never holds the key.
+      - key: SUMMARY_WEBHOOK_URL
         scope: RUN_TIME
-        value: ${CLOSE_WEBHOOK_URL}
-      - key: CLOSE_WEBHOOK_SECRET
-        scope: RUN_TIME
-        type: SECRET
-        value: ${CLOSE_WEBHOOK_SECRET}
-
-      # ── inference ───────────────────────────────────────────────────────
-      - key: INFERENCE_BASE_URL
-        scope: RUN_TIME
-        value: ${INFERENCE_BASE_URL}
-      - key: INFERENCE_MODEL
-        scope: RUN_TIME
-        value: ${INFERENCE_MODEL}
-      - key: INFERENCE_API_KEY
+        value: ${SUMMARY_WEBHOOK_URL}
+      - key: SUMMARY_WEBHOOK_SECRET
         scope: RUN_TIME
         type: SECRET
-        value: ${INFERENCE_API_KEY}
+        value: ${SUMMARY_WEBHOOK_SECRET}
 
       # ── dashboard ───────────────────────────────────────────────────────
       - key: ADMIN_PASSWORD
@@ -140,11 +128,9 @@ services:
         type: SECRET
         value: ${SESSION_SECRET}
 
-      # Lets the dashboard show the live MARS session census.
-      - key: DIGITALOCEAN_ACCESS_TOKEN
-        scope: RUN_TIME
-        type: SECRET
-        value: ${DIGITALOCEAN_ACCESS_TOKEN}
+      # No DIGITALOCEAN_ACCESS_TOKEN, on purpose. The app never calls the
+      # DigitalOcean API, and an account-wide read/write token has no place
+      # on a public web server. "In flight" comes from the database.
 
       # A conference room submits in bursts; the inference service allows
       # 240 req/min per team, so keep the per-visitor ceiling modest.

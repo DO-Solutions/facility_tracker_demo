@@ -46,6 +46,6 @@ MARS_WEBHOOK_SHARDS=$(jq -r '.intake_shards // empty' .deploy-state.json)
 MARS_WEBHOOK_URL=$(jq -r .webhook_url .deploy-state.json)
 MARS_WEBHOOK_SECRET=$(jq -r .webhook_secret .deploy-state.json)
 MARS_TICKET_TABLE=tickets
-CLOSE_WEBHOOK_URL=$(jq -r '.close_webhook_url // empty' .deploy-state.json)
-CLOSE_WEBHOOK_SECRET=$(jq -r '.close_webhook_secret // empty' .deploy-state.json)
+SUMMARY_WEBHOOK_URL=$(jq -r '.summary_webhook_url // empty' .deploy-state.json)
+SUMMARY_WEBHOOK_SECRET=$(jq -r '.summary_webhook_secret // empty' .deploy-state.json)
 EOF

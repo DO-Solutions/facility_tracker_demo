@@ -1,42 +1,30 @@
 import { useEffect, useState } from 'react';
-import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Section } from '@/components/AdminShell';
 import { api, type Summary } from '@/lib/api';
+import { useSummaryRequest } from '@/lib/useSummaryRequest';
 
 export default function SummaryPage({ summaryTick }: { summaryTick: number }) {
   const [summaries, setSummaries] = useState<Summary[]>([]);
-  const [busy, setBusy] = useState(false);
+  const { pending, request } = useSummaryRequest(summaryTick);
 
   useEffect(() => { api.summaries().then((d) => setSummaries(d.summaries)); }, [summaryTick]);
-
-  async function generate() {
-    setBusy(true);
-    try {
-      const s = await api.generateSummary();
-      setSummaries((prev) => [s, ...prev]);
-      toast.success('Executive summary generated.');
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Could not generate the summary.');
-    } finally {
-      setBusy(false);
-    }
-  }
 
   return (
     <>
       <div className="flex items-center gap-4">
         <Section>Executive summaries</Section>
         <div className="flex-1" />
-        <Button onClick={generate} disabled={busy} className="mt-8 mb-3">
-          {busy ? 'Generating…' : 'Generate now'}
+        <Button onClick={request} disabled={pending} className="mt-8 mb-3">
+          {pending ? 'Agent writing…' : 'Generate now'}
         </Button>
       </div>
 
       <p className="text-muted-foreground mb-5 text-[13.5px]">
-        Reads ticket volumes and writes the closing summary — total tickets, the top three
-        components, and a straight-faced headcount ask. Press it when you want the ending.
+        Hands the ticket volumes to an agent, which writes the closing summary — total tickets,
+        the top three components, and a straight-faced headcount ask. It lands in about a
+        minute; press it a little before you want the ending.
       </p>
 
       {summaries.length === 0 && (

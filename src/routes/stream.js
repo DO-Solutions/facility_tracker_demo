@@ -8,7 +8,7 @@ export const streamRouter = express.Router();
 streamRouter.use('/stream', requireAdmin);
 
 /**
- * Server-sent events: new tickets, moving stats, and the MARS session census.
+ * Server-sent events: new tickets, moving stats, and finished summaries.
  *
  * Everything here originates from the watcher loops in ticket-watcher.js, so a
  * ticket written by an agent in another microVM reaches the projector the same
@@ -33,13 +33,11 @@ streamRouter.get('/stream', (req, res) => {
 
   const onTicket = (t) => send(EVENTS.TICKET, t);
   const onStats = (s) => send(EVENTS.STATS, s);
-  const onSessions = (s) => send(EVENTS.SESSIONS, s);
   const onSummary = (s) => send(EVENTS.SUMMARY, s);
   const onComplaint = (c) => send(EVENTS.COMPLAINT, c);
 
   bus.on(EVENTS.TICKET, onTicket);
   bus.on(EVENTS.STATS, onStats);
-  bus.on(EVENTS.SESSIONS, onSessions);
   bus.on(EVENTS.SUMMARY, onSummary);
   bus.on(EVENTS.COMPLAINT, onComplaint);
 
@@ -50,7 +48,6 @@ streamRouter.get('/stream', (req, res) => {
     clearInterval(keepAlive);
     bus.off(EVENTS.TICKET, onTicket);
     bus.off(EVENTS.STATS, onStats);
-    bus.off(EVENTS.SESSIONS, onSessions);
     bus.off(EVENTS.SUMMARY, onSummary);
     bus.off(EVENTS.COMPLAINT, onComplaint);
   });

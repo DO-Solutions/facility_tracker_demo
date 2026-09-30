@@ -85,6 +85,8 @@ try {
     ['mars_writer',   'INSERT', 'tickets',    true],
     ['mars_writer',   'DELETE', 'tickets',    false],
     ['mars_writer',   'SELECT', 'summaries',  false],
+    ['mars_writer',   'UPDATE', 'summaries',  false],
+    ['mars_writer',   'DELETE', 'summaries',  false],
   ];
 
   // Column-level: the agent may read back the id it just inserted, and
@@ -96,10 +98,14 @@ try {
     ['mars_writer', 'UPDATE', 'tickets', 'issue_url', true],
     ['mars_writer', 'UPDATE', 'tickets', 'issue_at',  true],
     ['mars_writer', 'UPDATE', 'tickets', 'title',     false],
+    ['mars_writer', 'UPDATE', 'tickets', 'issue_closed_at', false],
     ['mars_writer', 'SELECT', 'complaints', 'id',   true],
     ['mars_writer', 'SELECT', 'complaints', 'body', false],
     ['mars_writer', 'UPDATE', 'complaints', 'status', true],
     ['mars_writer', 'UPDATE', 'complaints', 'body',   false],
+    // The summary agent: write a summary, never read one back.
+    ['mars_writer', 'INSERT', 'summaries', 'narrative', true],
+    ['mars_writer', 'SELECT', 'summaries', 'narrative', false],
   ];
 
   let failures = 0;

@@ -9,7 +9,7 @@ export default function Wall() {
   const [seed, setSeed] = useState<Ticket[]>([]);
   const [seedStats, setSeedStats] = useState<Stats | null>(null);
   const [ready, setReady] = useState(false);
-  const { tickets, stats: liveStats, sessions, live } = useLiveFeed(seed, 24);
+  const { tickets, stats: liveStats, live } = useLiveFeed(seed, 24);
 
   useEffect(() => {
     api.tickets({ limit: 12 }).then((d) => {
@@ -36,7 +36,6 @@ export default function Wall() {
         <div className="ml-auto flex flex-wrap gap-7 text-right">
           <Count value={stats?.tickets ?? 0} label="Tickets filed" accent />
           <Count value={stats?.processing ?? 0} label="In flight" />
-          <Count value={sessions?.total ?? '—'} label="MARS sessions" />
         </div>
       </header>
 

@@ -15,7 +15,6 @@
     "db:reset": "node scripts/reset.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.128.0",
     "cookie-parser": "^1.4.7",
     "dotenv": "^17.0.0",
     "express": "^5.1.0",

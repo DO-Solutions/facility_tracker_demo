@@ -1,0 +1,48 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Facility Issue Tracker — executive summary agent.
+#
+# Fired by the "Generate now" button. The app sends the period's figures in
+# the payload; this agent writes the narrative and the headcount ask and
+# inserts one row into `summaries`. The dashboard picks the row up the same
+# way it picks up tickets: by polling Postgres.
+#
+# Why an agent rather than the app calling the model itself: it keeps the
+# model credential off the web tier entirely. The app holds no inference key
+# and no DigitalOcean token; every model call in the demo happens inside a
+# sandbox.
+#
+# The figures arrive in the payload rather than being queried, because the
+# role this agent connects as cannot read a single ticket. It can insert a
+# summary and nothing else of use. See db/grants.postgres.sql.
+#
+# The voice lives in agents/summary-voice.txt; deploy.sh prepends it to
+# agents/summary-prompt.txt, which carries the mechanics.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: exec-summary
+agent: opencode
+description: Writes one executive summary from the figures it is handed.
+
+size: mars-1vcpu-1gb
+persistent_workspace: false
+idle_timeout: 5m
+
+env:
+  HARNESS_INFERENCE_BASE_URL: ${INFERENCE_BASE_URL}/v1
+  HARNESS_INFERENCE_MODEL: ${INFERENCE_MODEL}
+
+secrets:
+  HARNESS_INFERENCE_API_KEY: {}
+
+  # The same least-privilege role the other agents use. Against this agent it
+  # can do exactly one useful thing: INSERT into `summaries`.
+  MARS_DATABASE_URL: ${MARS_DATABASE_URL}
+
+# No Action Gateway tools. This agent never touches GitHub.
+
+permissions:
+  default: allow
+  filesystem:
+    mode: workspace-write
+
+egress: unrestricted

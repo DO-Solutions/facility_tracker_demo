@@ -1,8 +1,6 @@
 import crypto from 'node:crypto';
 import { config } from './../config.js';
 
-const DO_API = 'https://api.digitalocean.com';
-
 /**
  * Signs a payload the way DigitalOcean's `custom` webhook provider expects.
  *
@@ -120,33 +118,27 @@ async function deliver(shard, payload) {
 }
 
 /**
- * Fires the close trigger for one ticket's GitHub issue.
+ * Fires the summary trigger with the figures the summary should cite.
  *
- * A trigger again, and for the actor reason in fireResetWebhook above: the
- * app holds no GitHub credential, so the only way to reach the tracker is a
- * session started by a trigger.
- *
- * The caller has already written `closed_at`. This is the tracker catching
- * up, so it is fired and forgotten — a ticket that is closed on the wall but
- * whose issue is still open is a footnote, not a failure.
+ * The app computes the figures because the agent's database role cannot read
+ * a ticket; the agent writes the prose and inserts the row. That split is
+ * what keeps the model key off this process entirely. The row reaches the
+ * dashboard through the same polling loop as tickets, so this only has to
+ * deliver — the caller answers the button before the summary exists.
  */
-export async function fireCloseIssueWebhook({ ticketId, issueNumber }) {
-  const { closeWebhookUrl, closeWebhookSecret } = config.ingest;
-  if (!closeWebhookUrl) return { fired: false, reason: 'no close trigger configured' };
+export async function fireSummaryWebhook(figures) {
+  const { summaryWebhookUrl, summaryWebhookSecret } = config.ingest;
+  if (!summaryWebhookUrl) throw new Error('no summary trigger configured — run ./deploy.sh');
 
-  const payload = JSON.stringify({
-    ticket_id: ticketId,
-    issue_number: issueNumber,
-    requested_at: new Date().toISOString(),
-  });
+  const payload = JSON.stringify({ ...figures, requested_at: new Date().toISOString() });
   const headers = { 'content-type': 'application/json' };
-  if (closeWebhookSecret) {
-    const sig = signPayload(payload, closeWebhookSecret);
+  if (summaryWebhookSecret) {
+    const sig = signPayload(payload, summaryWebhookSecret);
     headers['X-DigitalOcean-Signature'] = sig;
     headers['do-signature'] = sig;
   }
 
-  const res = await fetch(closeWebhookUrl, {
+  const res = await fetch(summaryWebhookUrl, {
     method: 'POST',
     headers,
     body: payload,
@@ -154,37 +146,6 @@ export async function fireCloseIssueWebhook({ ticketId, issueNumber }) {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`close trigger returned ${res.status}: ${text.slice(0, 200)}`);
+    throw new Error(`summary trigger returned ${res.status}: ${text.slice(0, 200)}`);
   }
-  return { fired: true };
-}
-
-/**
- * Live session census for the dashboard — the "scale story without saying the
- * word scale". Counts sessions by status across the team.
- */
-export async function sessionCensus() {
-  if (!config.digitalocean.token) return null;
-
-  const res = await fetch(`${DO_API}/v2/agents/sessions`, {
-    headers: {
-      authorization: `Bearer ${config.digitalocean.token}`,
-      accept: 'application/json',
-    },
-    signal: AbortSignal.timeout(10_000),
-  });
-
-  if (!res.ok) throw new Error(`sessions API returned ${res.status}`);
-
-  const { sessions = [] } = await res.json();
-
-  const tally = { total: sessions.length, running: 0, paused: 0, other: 0 };
-  for (const s of sessions) {
-    const status = String(s.status || '').replace('SESSION_STATUS_', '').toLowerCase();
-    if (['running', 'ready', 'starting', 'creating', 'active'].includes(status)) tally.running += 1;
-    else if (status === 'paused') tally.paused += 1;
-    else tally.other += 1;
-  }
-
-  return tally;
 }

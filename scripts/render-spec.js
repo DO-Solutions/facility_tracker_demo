@@ -30,27 +30,21 @@ const KEYS = [
   'MARS_WEBHOOK_SHARDS_B64',
   'GITHUB_ISSUE_REPO',
   'GITHUB_ISSUE_TOKEN',
-  'CLOSE_WEBHOOK_URL',
-  'CLOSE_WEBHOOK_SECRET',
-  'INFERENCE_BASE_URL',
-  'INFERENCE_MODEL',
-  'INFERENCE_API_KEY',
+  'SUMMARY_WEBHOOK_URL',
+  'SUMMARY_WEBHOOK_SECRET',
   'ADMIN_PASSWORD',
   'SESSION_SECRET',
-  'DIGITALOCEAN_ACCESS_TOKEN',
   'DB_CA_CERT_B64',
 ];
 
-// Substituted, but allowed to be empty. Each of these is filled in by a
-// trigger that deploy.sh only creates when GITHUB_ISSUE_REPO is set, and the
-// README promises the demo still runs without it. Requiring them would turn
+// Substituted, but allowed to be empty. The GitHub tracker is optional —
+// the README promises the demo still runs without it — and the shard list
+// falls back to the single MARS_WEBHOOK_URL. Requiring them would turn
 // "no tracker" into "no deploy".
 const OPTIONAL = new Set([
   'MARS_WEBHOOK_SHARDS_B64',
   'GITHUB_ISSUE_REPO',
   'GITHUB_ISSUE_TOKEN',
-  'CLOSE_WEBHOOK_URL',
-  'CLOSE_WEBHOOK_SECRET',
 ]);
 
 const template = fs.readFileSync(templatePath, 'utf8');

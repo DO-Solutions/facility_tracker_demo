@@ -7,10 +7,13 @@
 #
 # Stands up, on your own DigitalOcean team:
 #
-#   1. a Managed Postgres cluster, with the schema and two least-privilege roles
-#   2. a Harness Runtime webhook trigger  — one microVM per complaint
-#   3. a Harness Runtime cron trigger     — the closing executive summary
+#   1. a Managed Postgres cluster, with the schema and a least-privilege role
+#   2. Harness Runtime intake triggers    — one microVM per complaint
+#   3. a summary trigger                  — writes the executive summary
 #   4. an App Platform service            — the form, the dashboard, the wall
+#
+# The web tier holds no model key and no DigitalOcean token: every model call
+# happens inside an agent sandbox.
 #
 # Re-running is safe: every step checks for what it already made.
 # Tear the whole thing down with ./destroy.sh.
@@ -46,19 +49,44 @@ set -a
 source .env
 set +a
 
-: "${STACK_NAME:=complaints-dept}"
+: "${STACK_NAME:=facility-tracker-demo}"
 : "${DO_REGION:=nyc3}"
 : "${GITHUB_BRANCH:=main}"
 : "${APP_SIZE:=basic-xxs}"
 : "${DB_SIZE:=db-s-1vcpu-1gb}"
 : "${DB_VERSION:=17}"
 : "${INFERENCE_BASE_URL:=https://inference.do-ai.run}"
-: "${INFERENCE_MODEL:=anthropic-claude-opus-5}"
+: "${INFERENCE_MODEL:=qwen3.8-max}"
 : "${MARS_TICKET_TABLE:=tickets}"
 : "${DB_NAME:=complaints}"
 : "${GITHUB_ISSUE_REPO:=}"
+: "${ENABLE_GITHUB_ISSUES:=false}"
 : "${SUMMARY_CRON:=}"
 : "${SUMMARY_TIMEZONE:=America/New_York}"
+
+# It becomes the App Platform app and database names, which accept only
+# lowercase letters, digits and hyphens. Refuse early, before anything costs.
+case "$STACK_NAME" in
+  *[!a-z0-9-]*|-*|*-|'') die "STACK_NAME '$STACK_NAME' must be lowercase letters, numbers and hyphens (e.g. facility-tracker-demo)." ;;
+esac
+
+# GitHub issues are opt-in. Off means off everywhere: the complaint agent gets
+# no GitHub tools, permissions or instructions, and the app gets no tracker
+# repo or token — so Reset leaves GitHub alone and the UI hides issue links.
+case "$(printf '%s' "$ENABLE_GITHUB_ISSUES" | tr '[:upper:]' '[:lower:]')" in
+  true|1|yes|on)       GITHUB_ON=1 ;;
+  false|0|no|off|'')   GITHUB_ON="" ;;
+  *) die "ENABLE_GITHUB_ISSUES must be true or false (got '$ENABLE_GITHUB_ISSUES')." ;;
+esac
+if [ -n "$GITHUB_ON" ]; then
+  case "$GITHUB_ISSUE_REPO" in
+    ?*/?*) ;;
+    *) die "ENABLE_GITHUB_ISSUES is true, so GITHUB_ISSUE_REPO must be set as owner/repo (got '${GITHUB_ISSUE_REPO}')." ;;
+  esac
+else
+  GITHUB_ISSUE_REPO=""
+  GITHUB_ISSUE_TOKEN=""
+fi
 
 # App Platform regions are the datacentre without the trailing digit.
 DO_REGION_SLUG="$(printf '%s' "$DO_REGION" | sed -E 's/[0-9]+$//')"
@@ -283,7 +311,39 @@ if [ -n "$GITHUB_ISSUE_REPO" ]; then
   esac
 fi
 
-COMPLAINT_SPEC="agents/complaint-agent.yaml"
+# The manifest and prompt are rendered for the GitHub setting rather than
+# used as-is. With issues off, the @@github blocks are cut from the manifest
+# (no tools, no rules, no repo) and the prompt's @@GITHUB_SECTION@@ line is
+# dropped; with them on, the markers go and the section is spliced in.
+COMPLAINT_SPEC="$(mktemp "${TMPDIR:-/tmp}/complaint-agent.XXXXXX")"
+mv "$COMPLAINT_SPEC" "$COMPLAINT_SPEC.yaml"; COMPLAINT_SPEC="$COMPLAINT_SPEC.yaml"
+trap 'rm -f "$COMPLAINT_SPEC"' EXIT
+if [ -n "$GITHUB_ON" ]; then
+  awk '!/@@github:(start|end)/' agents/complaint-agent.yaml > "$COMPLAINT_SPEC"
+else
+  awk '/@@github:start/ { skip = 1; next }  /@@github:end/ { skip = 0; next }  !skip' \
+    agents/complaint-agent.yaml > "$COMPLAINT_SPEC"
+fi
+COMPLAINT_PROMPT="$(awk -v on="$GITHUB_ON" -v gh=agents/complaint-prompt-github.txt '
+  $0 == "@@GITHUB_SECTION@@" {
+    if (on) {
+      header = 1
+      while ((getline line < gh) > 0) {
+        # Drop the file header: leading # lines and the blank line after them.
+        if (header && line ~ /^#/) continue
+        if (header && line == "") { header = 0; continue }
+        header = 0
+        print line
+      }
+    }
+    next
+  }
+  { print }' agents/complaint-prompt.txt)"
+if [ -n "$GITHUB_ON" ]; then
+  ok "GitHub issues: on — filed in $GITHUB_ISSUE_REPO"
+else
+  info "GitHub issues: off — tickets only (set ENABLE_GITHUB_ISSUES=true to file issues)"
+fi
 
 # A Harness Runtime trigger runs exactly one session at a time. That is a
 # platform behaviour with no knob on the trigger, and it is per *trigger*
@@ -299,7 +359,7 @@ case "$INTAKE_SHARDS" in ''|*[!0-9]*) die "INTAKE_SHARDS must be a whole number 
 [ "$INTAKE_SHARDS" -ge 1 ] || die "INTAKE_SHARDS must be at least 1"
 
 doctl harness-runtime validate "$COMPLAINT_SPEC" >/dev/null \
-  || die "agents/complaint-agent.yaml failed validation."
+  || die "agents/complaint-agent.yaml failed validation (rendered with GitHub issues $([ -n "$GITHUB_ON" ] && echo on || echo off))."
 
 trigger_list="$(doctl harness-runtime triggers list --output json 2>/dev/null)"
 shards_json="[]"
@@ -328,9 +388,9 @@ for i in $(seq 1 "$INTAKE_SHARDS"); do
     # while the old wording kept running — a silent no-op, and a nasty one.
     # Updating in place keeps the webhook URL and its secret.
     update_out="$(doctl harness-runtime triggers update "$shard_id" \
-      --prompt "$(cat agents/complaint-prompt.txt)" \
+      --prompt "$COMPLAINT_PROMPT" \
       --spec "$COMPLAINT_SPEC" \
-      --secret "ANTHROPIC_API_KEY=${INFERENCE_API_KEY}" \
+      --secret "HARNESS_INFERENCE_API_KEY=${INFERENCE_API_KEY}" \
       --secret "MARS_DATABASE_URL=${MARS_DATABASE_URL}" \
       2>&1)" \
       && updated=$((updated + 1)) \
@@ -349,8 +409,8 @@ for i in $(seq 1 "$INTAKE_SHARDS"); do
       --name "$shard_name" \
       --session-mode fresh \
       --spec "$COMPLAINT_SPEC" \
-      --prompt "$(cat agents/complaint-prompt.txt)" \
-      --secret "ANTHROPIC_API_KEY=${INFERENCE_API_KEY}" \
+      --prompt "$COMPLAINT_PROMPT" \
+      --secret "HARNESS_INFERENCE_API_KEY=${INFERENCE_API_KEY}" \
       --secret "MARS_DATABASE_URL=${MARS_DATABASE_URL}" \
       --output json 2>&1)" || die "trigger $shard_name creation failed:\n$created"
 
@@ -393,55 +453,81 @@ state_set intake_shards "$shards_json"
 
 ok "$INTAKE_SHARDS intake trigger(s): $made created, $updated updated — $INTAKE_SHARDS complaints can run at once"
 
-# ── 3c. close-issue trigger ──────────────────────────────────────────────────
+# ── 3c. retire the close-issue trigger ───────────────────────────────────────
+# There used to be an agent that closed one ticket's GitHub issue from the
+# Close button. Issues are now only removed in bulk by Reset, so the trigger
+# is deleted if an earlier deploy left it, along with its saved secret.
 
-step "4/5  Harness Runtime close-issue trigger"
-
-if [ -z "$GITHUB_ISSUE_REPO" ]; then
-  info "GITHUB_ISSUE_REPO not set — skipping the close-issue trigger."
-else
-  CLOSE_TRIGGER="${STACK_NAME}-close"
-  existing_close="$(doctl harness-runtime triggers list --output json 2>/dev/null \
-    | jq -r --arg n "$CLOSE_TRIGGER" '.[]? | select(.name==$n) | .trigger_id // .id' | head -1)"
-
-  CLOSE_WEBHOOK_URL="$(state_get close_webhook_url)"
-  CLOSE_WEBHOOK_SECRET="$(state_get close_webhook_secret)"
-
-  if [ -n "$existing_close" ] && [ -n "$CLOSE_WEBHOOK_URL" ] && [ -n "$CLOSE_WEBHOOK_SECRET" ]; then
-    doctl harness-runtime triggers update "$existing_close" \
-      --prompt "$(cat agents/close-issue-prompt.txt)" \
-      --spec agents/close-issue-agent.yaml \
-      --secret "ANTHROPIC_API_KEY=${INFERENCE_API_KEY}" \
-      --secret "MARS_DATABASE_URL=${MARS_DATABASE_URL}" \
-      >/dev/null 2>&1 \
-      && ok "trigger $CLOSE_TRIGGER updated" \
-      || warn "trigger $CLOSE_TRIGGER could not be updated"
-  else
-    [ -n "$existing_close" ] && doctl harness-runtime triggers delete "$existing_close" --force >/dev/null 2>&1
-
-    doctl harness-runtime validate agents/close-issue-agent.yaml >/dev/null \
-      || die "agents/close-issue-agent.yaml failed validation."
-
-    info "creating $CLOSE_TRIGGER"
-    close_out="$(doctl harness-runtime triggers create \
-      --kind webhook --provider custom \
-      --name "$CLOSE_TRIGGER" \
-      --session-mode fresh \
-      --spec agents/close-issue-agent.yaml \
-      --prompt "$(cat agents/close-issue-prompt.txt)" \
-      --secret "ANTHROPIC_API_KEY=${INFERENCE_API_KEY}" \
-      --secret "MARS_DATABASE_URL=${MARS_DATABASE_URL}" \
-      --output json 2>&1)" || die "close-issue trigger creation failed:\n$close_out"
-
-    CLOSE_WEBHOOK_URL="$(echo "$close_out" | first_of '(.webhook.webhook_url // .webhook_url)')"
-    CLOSE_WEBHOOK_SECRET="$(echo "$close_out" | first_of '(.webhook_secret // .webhook.secret // .secret)')"
-    [ -n "$CLOSE_WEBHOOK_URL" ] || die "no webhook_url in close-issue trigger response."
-
-    state_set close_trigger_id "$(echo "$close_out" | first_of '(.trigger_id // .id)')"
-    state_set close_webhook_url "$CLOSE_WEBHOOK_URL"
-    state_set close_webhook_secret "$CLOSE_WEBHOOK_SECRET"
-    ok "created"
+CLOSE_TRIGGER="${STACK_NAME}-close"
+existing_close="$(doctl harness-runtime triggers list --output json 2>/dev/null \
+  | jq -r --arg n "$CLOSE_TRIGGER" '.[]? | select(.name==$n) | .trigger_id // .id' | head -1)"
+if [ -n "$existing_close" ]; then
+  doctl harness-runtime triggers delete "$existing_close" --force >/dev/null 2>&1 \
+    && ok "retired $CLOSE_TRIGGER (Close no longer touches GitHub)" \
+    || warn "could not delete retired trigger $CLOSE_TRIGGER ($existing_close)"
+fi
+for k in close_trigger_id close_webhook_url close_webhook_secret; do
+  if [ -n "$(state_get "$k")" ]; then
+    jq --arg k "$k" 'del(.[$k])' "$STATE_FILE" > "$STATE_FILE.tmp"
+    mv "$STATE_FILE.tmp" "$STATE_FILE"
+    chmod 600 "$STATE_FILE"
   fi
+done
+
+# ── 3d. executive summary trigger ────────────────────────────────────────────
+# Always created: it never touches GitHub, so it does not depend on
+# GITHUB_ISSUE_REPO. It is what keeps the model key off the web tier — the app sends the figures, the
+# agent writes the summary row.
+
+step "4/5  Harness Runtime summary trigger"
+
+SUMMARY_TRIGGER="${STACK_NAME}-summary"
+# The voice is shared prose; the mechanics are this trigger's own.
+SUMMARY_PROMPT="$(cat agents/summary-voice.txt; printf '\n\n'; cat agents/summary-prompt.txt)"
+
+existing_summary="$(doctl harness-runtime triggers list --output json 2>/dev/null \
+  | jq -r --arg n "$SUMMARY_TRIGGER" '.[]? | select(.name==$n) | .trigger_id // .id' | head -1)"
+
+SUMMARY_WEBHOOK_URL="$(state_get summary_webhook_url)"
+SUMMARY_WEBHOOK_SECRET="$(state_get summary_webhook_secret)"
+
+if [ -n "$existing_summary" ] && [ -n "$SUMMARY_WEBHOOK_URL" ] && [ -n "$SUMMARY_WEBHOOK_SECRET" ]; then
+  doctl harness-runtime triggers update "$existing_summary" \
+    --prompt "$SUMMARY_PROMPT" \
+    --spec agents/summary-agent.yaml \
+    --secret "HARNESS_INFERENCE_API_KEY=${INFERENCE_API_KEY}" \
+    --secret "MARS_DATABASE_URL=${MARS_DATABASE_URL}" \
+    >/dev/null 2>&1 \
+    && ok "trigger $SUMMARY_TRIGGER updated" \
+    || warn "trigger $SUMMARY_TRIGGER could not be updated"
+else
+  # The secret is shown once at creation; without it in state we cannot sign
+  # deliveries, so replace the trigger rather than ship a broken one.
+  [ -n "$existing_summary" ] && doctl harness-runtime triggers delete "$existing_summary" --force >/dev/null 2>&1
+
+  doctl harness-runtime validate agents/summary-agent.yaml >/dev/null \
+    || die "agents/summary-agent.yaml failed validation."
+
+  info "creating $SUMMARY_TRIGGER"
+  summary_out="$(doctl harness-runtime triggers create \
+    --kind webhook --provider custom \
+    --name "$SUMMARY_TRIGGER" \
+    --session-mode fresh \
+    --spec agents/summary-agent.yaml \
+    --prompt "$SUMMARY_PROMPT" \
+    --secret "HARNESS_INFERENCE_API_KEY=${INFERENCE_API_KEY}" \
+    --secret "MARS_DATABASE_URL=${MARS_DATABASE_URL}" \
+    --output json 2>&1)" || die "summary trigger creation failed:\n$summary_out"
+
+  SUMMARY_WEBHOOK_URL="$(echo "$summary_out" | first_of '(.webhook.webhook_url // .webhook_url)')"
+  SUMMARY_WEBHOOK_SECRET="$(echo "$summary_out" | first_of '(.webhook_secret // .webhook.secret // .secret)')"
+  [ -n "$SUMMARY_WEBHOOK_URL" ]    || die "no webhook_url in summary trigger response."
+  [ -n "$SUMMARY_WEBHOOK_SECRET" ] || die "no one-time secret in summary trigger response."
+
+  state_set summary_trigger_id "$(echo "$summary_out" | first_of '(.trigger_id // .id)')"
+  state_set summary_webhook_url "$SUMMARY_WEBHOOK_URL"
+  state_set summary_webhook_secret "$SUMMARY_WEBHOOK_SECRET"
+  ok "created"
 fi
 
 # ── 5. App Platform ──────────────────────────────────────────────────────────
@@ -455,7 +541,7 @@ state_set session_secret "$SESSION_SECRET"
 export STACK_NAME DO_REGION_SLUG DB_CLUSTER_NAME DB_NAME APP_SIZE
 export GITHUB_REPO GITHUB_BRANCH
 export MARS_WEBHOOK_URL MARS_WEBHOOK_SECRET
-export CLOSE_WEBHOOK_URL="${CLOSE_WEBHOOK_URL:-}" CLOSE_WEBHOOK_SECRET="${CLOSE_WEBHOOK_SECRET:-}"
+export SUMMARY_WEBHOOK_URL SUMMARY_WEBHOOK_SECRET
 export MARS_WEBHOOK_SHARDS="${MARS_WEBHOOK_SHARDS:-}"
 export ADMIN_PASSWORD SESSION_SECRET
 
